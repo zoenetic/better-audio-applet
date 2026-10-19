@@ -1,0 +1,15 @@
+[Desktop Entry]
+Name=Better Audio
+Comment=Volume and output device per app, plus media controls
+Type=Application
+Exec=better-audio-applet
+Terminal=false
+Categories=COSMIC;
+Keywords=COSMIC;Applet;Sound;Audio;Volume;MPRIS;
+Icon=audio-volume-high-symbolic
+StartupNotify=true
+NoDisplay=true
+X-CosmicApplet=true
+X-CosmicShrinkable=true
+X-CosmicHoverPopup=End
+X-OverflowPriority=10

@@ -1,0 +1,40 @@
+[package]
+name = "better-audio-applet"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "COSMIC panel audio applet with per-app volume and output selection"
+
+[dependencies]
+futures = "0.3"
+libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = [
+    "applet",
+    "applet-token",
+    "dbus-config",
+    "multi-window",
+    "process",
+    "tokio",
+    "wayland",
+    "winit",
+] }
+libpulse-binding = "2.28"
+mpris2-zbus = { git = "https://github.com/pop-os/dbus-settings-bindings" }
+pipewire = "0.10"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-log = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+urlencoding = "2.1"
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+
+[patch."https://github.com/smithay/client-toolkit.git"]
+sctk = { package = "smithay-client-toolkit", version = "0.20.0" }
+
+[profile.release]
+lto = "thin"
+
+[patch."https://github.com/pop-os/cosmic-protocols"]
+cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols//", rev = "c0cff4d" }
+cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", rev = "c0cff4d" }
