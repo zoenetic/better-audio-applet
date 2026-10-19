@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev pkg-config libpulse-dev libpipewire-0.3-dev clang
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: just check
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: check
+    # Built on an older glibc than current distros so the binary runs on them too
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev pkg-config libpulse-dev libpipewire-0.3-dev clang
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - uses: Swatinem/rust-cache@v2
+      - run: just build-release --locked
+      - name: Package
+        run: |
+          dir=better-audio-applet-${GITHUB_REF_NAME}-x86_64
+          mkdir -p "$dir/target/release"
+          cp target/release/better-audio-applet "$dir/target/release/"
+          cp -r data justfile LICENSE README.md "$dir/"
+          tar czf "$dir.tar.gz" "$dir"
+          sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            better-audio-applet-*.tar.gz
+            better-audio-applet-*.tar.gz.sha256
+          generate_release_notes: true

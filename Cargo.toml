@@ -4,9 +4,14 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
 description = "COSMIC panel audio applet with per-app volume and output selection"
+repository = "https://github.com/zoenetic/better-audio-applet"
+rust-version = "1.90"
 
 [dependencies]
 futures = "0.3"
+# The commit is pinned in Cargo.lock (build with --locked). No `rev` here: libcosmic's
+# own cosmic-panel-config dependency asks for this same URL without one, and a `rev`
+# would make Cargo build two copies of libcosmic, which `cargo vendor` refuses.
 libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = [
     "applet",
     "applet-token",
@@ -18,9 +23,8 @@ libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = fa
     "winit",
 ] }
 libpulse-binding = "2.28"
-mpris2-zbus = { git = "https://github.com/pop-os/dbus-settings-bindings" }
+mpris2-zbus = { git = "https://github.com/pop-os/dbus-settings-bindings", rev = "eed01dd3609e90e3c8cd043656734c500956c793" }
 pipewire = "0.10"
-serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-log = "0.2"
@@ -33,8 +37,11 @@ zbus = { version = "5", default-features = false, features = ["tokio"] }
 sctk = { package = "smithay-client-toolkit", version = "0.20.0" }
 
 [profile.release]
+opt-level = 3
+panic = "abort"
 lto = "thin"
 
 [patch."https://github.com/pop-os/cosmic-protocols"]
 cosmic-protocols = { git = "https://github.com/pop-os/cosmic-protocols//", rev = "c0cff4d" }
 cosmic-client-toolkit = { git = "https://github.com/pop-os/cosmic-protocols//", rev = "c0cff4d" }
+

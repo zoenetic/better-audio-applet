@@ -16,20 +16,55 @@ the panel, without opening COSMIC Settings.
 - Now playing bar with previous / play-pause / next (click it to open the player).
 - On the panel icon: scroll to change volume, middle-click to mute.
 
-## Build and install (Fedora)
+## Requirements
+
+- COSMIC desktop
+- PipeWire with `pipewire-pulse` and WirePlumber (the default on Fedora)
+
+Build dependencies on Fedora:
 
 ```sh
-sudo dnf install cargo rust just clang pulseaudio-libs-devel pipewire-devel \
-    libxkbcommon-devel wayland-devel expat-devel fontconfig-devel freetype-devel \
-    libinput-devel systemd-devel
-just build
-sudo just install        # or: just install-local (no sudo, installs to ~/.local)
+sudo dnf install cargo just clang libxkbcommon-devel wayland-devel \
+    pulseaudio-libs-devel pipewire-devel
 ```
 
-Then open **COSMIC Settings → Desktop → Panel → Applets**, add **Better Audio**,
-and remove the stock **Sound** applet.
+## Build and install
 
-To see logs, remove the applet from the panel and run `just run` in a terminal.
+```sh
+just
+sudo just install
+```
+
+Then open *Settings → Desktop → Panel → Configure panel applets*, add
+**Better Audio**, and remove the stock **Sound** applet.
+
+To remove: `sudo just uninstall`.
+
+### From a release
+
+Each [release](https://github.com/zoenetic/better-audio-applet/releases) has a
+prebuilt x86_64 tarball, so no build dependencies are needed. Unpack it, then
+from inside the folder:
+
+```sh
+sudo just install
+```
+
+## Development
+
+```sh
+just check    # clippy + tests
+just run      # run outside the panel, with debug logs
+just vendor   # bundle crates into vendor.tar for offline builds (just build-vendored)
+```
+
+Code layout:
+
+- `src/app.rs` – the applet (panel button, popup)
+- `src/model.rs` – known devices and app streams, grouping, pinned devices
+- `src/backend.rs` – starts the audio threads, one handle for the UI
+- `src/pulse.rs` – volumes, mutes and defaults through `pipewire-pulse`
+- `src/pw.rs` – per-app device pins through PipeWire metadata
 
 ## How it works
 
