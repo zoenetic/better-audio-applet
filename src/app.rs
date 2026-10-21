@@ -16,7 +16,7 @@ use cosmic::{
     iced::{
         self, Alignment, Length, Limits, Padding, Subscription,
         futures::{SinkExt, StreamExt},
-        widget::{column, row},
+        widget::{column, row, scrollable as scrollbar},
         window,
     },
     widget::{Column, button, container, divider, icon, scrollable, slider, space, text},
@@ -472,7 +472,18 @@ impl Audio {
                 list.push(self.app_row(Kind::Output, group))
             });
             page = page.push(
-                container(scrollable(list).height(Length::Shrink)).max_height(APP_LIST_HEIGHT),
+                container(
+                    scrollable(list)
+                        .height(Length::Shrink)
+                        // Keep the scrollbar inside the side margin, off the popup's edge.
+                        .direction(scrollbar::Direction::Vertical(
+                            scrollbar::Scrollbar::new()
+                                .width(6.0)
+                                .scroller_width(6.0)
+                                .margin(7.0),
+                        )),
+                )
+                .max_height(APP_LIST_HEIGHT),
             );
         }
 
@@ -887,8 +898,11 @@ fn choice<'a>(
 }
 
 fn app_icon_image<'a>(icon_name: Option<&str>, size: u16) -> Element<'a, Message> {
+    // Prefer SVG: some apps ship only small PNGs beside an SVG, and the PNG
+    // would be scaled up and look blurry.
     icon::from_name(icon_name.unwrap_or("application-x-executable"))
         .size(size)
+        .prefer_svg(true)
         .fallback(Some(icon::IconFallback::Names(vec![
             "application-x-executable".into(),
             "audio-x-generic".into(),
