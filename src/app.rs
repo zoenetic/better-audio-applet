@@ -32,6 +32,8 @@ const RECORD_LIST_HEIGHT: f32 = 170.0;
 const POPUP_WIDTH: f32 = 400.0;
 const APP_NAME_WIDTH: f32 = 180.0;
 const STREAM_NAME_WIDTH: f32 = 120.0;
+/// Handle size for the app sliders, smaller than the main ones (26).
+const SMALL_HANDLE: f32 = 16.0;
 const WHEEL_STEP: i32 = 5;
 
 /// The one list that is unfolded in the popup, if any.
@@ -556,10 +558,14 @@ impl Audio {
             .on_press(Message::Toggle(Open::App(kind, key.clone())));
 
         let mut line = row![mute, name].align_y(Alignment::Center).spacing(6);
-        line = line.push(slider(0..=max, value, {
-            let key = key.clone();
-            move |v| Message::GroupVolume(kind, key.clone(), v)
-        }));
+        line = line.push(
+            slider(0..=max, value, {
+                let key = key.clone();
+                move |v| Message::GroupVolume(kind, key.clone(), v)
+            })
+            .handle_width(SMALL_HANDLE)
+            .handle_height(SMALL_HANDLE),
+        );
 
         let mut item = column![line];
         if open {
@@ -598,7 +604,9 @@ impl Audio {
                                 .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
                             slider(0..=max, value, move |v| Message::StreamVolume(
                                 kind, index, v
-                            )),
+                            ))
+                            .handle_width(SMALL_HANDLE)
+                            .handle_height(SMALL_HANDLE),
                         ]
                         .align_y(Alignment::Center)
                         .spacing(8)
