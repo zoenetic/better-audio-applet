@@ -77,6 +77,21 @@ const IGNORED_APP_IDS: &[&str] = &[
     "com.system76.CosmicSettingsDaemon",
 ];
 
+/// COSMIC's own desktop processes. Their sounds (like the "pop" on every volume
+/// change) last a moment; listing them made the popup grow and shrink while a
+/// slider was dragged. COSMIC apps that play real audio, like COSMIC Player, are
+/// not in this list.
+const IGNORED_BINARIES: &[&str] = &[
+    "cosmic-panel",
+    "cosmic-osd",
+    "cosmic-comp",
+    "cosmic-settings-daemon",
+    "cosmic-applets",
+    "cosmic-notifications",
+    "cosmic-greeter",
+    "xdg-desktop-portal-cosmic",
+];
+
 pub fn run(commands: Receiver<Command>, events: UnboundedSender<Event>) {
     loop {
         if let Err(why) = session(&commands, &events) {
@@ -425,26 +440,31 @@ fn stream(
         return None;
     }
 
+    // Event sounds (notification blips, volume-change pops) last a moment, and
+    // desktop sounds aren't something to give a slider to.
+    if props.get_str(properties::MEDIA_ROLE).as_deref() == Some("event") {
+        return None;
+    }
+    let binary = props.get_str(properties::APPLICATION_PROCESS_BINARY);
+    if binary
+        .as_deref()
+        .is_some_and(|b| IGNORED_BINARIES.contains(&b) || b.starts_with("cosmic-applet"))
+    {
+        return None;
+    }
+
     let media_name = props
         .get_str(properties::MEDIA_NAME)
         .or_else(|| name.map(str::to_owned))
         .unwrap_or_default();
-    let binary = props.get_str(properties::APPLICATION_PROCESS_BINARY);
-    let is_event = props.get_str(properties::MEDIA_ROLE).as_deref() == Some("event");
-
-    let (app_key, app_name) = if is_event {
-        ("::events".to_owned(), "System sounds".to_owned())
-    } else {
-        let app_name = props
-            .get_str(properties::APPLICATION_NAME)
-            .or_else(|| binary.clone())
-            .unwrap_or_else(|| media_name.clone());
-        let key = binary
-            .clone()
-            .unwrap_or_else(|| app_name.clone())
-            .to_lowercase();
-        (key, app_name)
-    };
+    let app_name = props
+        .get_str(properties::APPLICATION_NAME)
+        .or_else(|| binary.clone())
+        .unwrap_or_else(|| media_name.clone());
+    let app_key = binary
+        .clone()
+        .unwrap_or_else(|| app_name.clone())
+        .to_lowercase();
 
     let icon_name = props
         .get_str(properties::APPLICATION_ICON_NAME)
