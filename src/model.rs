@@ -183,6 +183,8 @@ impl Model {
                 }),
             }
         }
+        // System sounds go last; they matter least.
+        groups.sort_by_key(|g| g.key == "::events");
         groups
     }
 

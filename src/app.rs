@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
+use crate::backend::{self, Handle};
+use crate::model::{Group, Model, percent, with_percent};
+use crate::mpris_subscription::{self, MprisRequest, MprisUpdate, PlayerStatus};
+use crate::pulse::{Command, Kind};
 use cosmic::iced::core::text::{Ellipsize, EllipsizeHeightLimit};
 use cosmic::{
     Element, Task, app,
@@ -15,23 +19,29 @@ use cosmic::{
         widget::{column, row},
         window,
     },
-    surface, theme,
-    widget::{Column, button, container, divider, dropdown, icon, scrollable, slider, space, text},
+    theme,
+    widget::{
+        Column, button, container, divider, icon, list_column, scrollable, slider, space, text,
+    },
 };
 use mpris2_zbus::player::PlaybackStatus;
-use std::collections::HashSet;
-
-use crate::backend::{self, Handle};
-use crate::model::{Group, Model, percent, with_percent};
-use crate::mpris_subscription::{self, MprisRequest, MprisUpdate, PlayerStatus};
-use crate::pulse::{Command, Kind};
 
 /// Height at which the app lists start scrolling.
-const PLAYBACK_LIST_HEIGHT: f32 = 300.0;
+const PLAYBACK_LIST_HEIGHT: f32 = 340.0;
 const RECORD_LIST_HEIGHT: f32 = 170.0;
 const POPUP_WIDTH: f32 = 400.0;
-const DEVICE_DROPDOWN_WIDTH: f32 = 150.0;
+const APP_NAME_WIDTH: f32 = 180.0;
+const STREAM_NAME_WIDTH: f32 = 120.0;
 const WHEEL_STEP: i32 = 5;
+
+/// The one list that is unfolded in the popup, if any.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Open {
+    /// The device list under Output or Input.
+    Devices(Kind),
+    /// An app's device list and per-stream sliders.
+    App(Kind, String),
+}
 
 #[derive(Default)]
 pub struct Audio {
@@ -39,8 +49,9 @@ pub struct Audio {
     popup: Option<window::Id>,
     backend: Option<Handle>,
     model: Model,
-    /// Apps whose individual streams are shown.
-    expanded: HashSet<(Kind, String)>,
+    open: Option<Open>,
+    /// Whether the apps using the mic are listed.
+    mics_open: bool,
     max_sink_volume: u32,
     max_source_volume: u32,
     player: Option<PlayerStatus>,
@@ -53,7 +64,6 @@ pub enum Message {
     Audio(backend::Event),
     TogglePopup,
     CloseRequested(window::Id),
-    Surface(surface::Action<Message>),
     SetDefault(Kind, usize),
     DeviceVolume(Kind, u32),
     ToggleDeviceMute(Kind),
@@ -64,7 +74,8 @@ pub enum Message {
     GroupDevice(Kind, String, usize),
     StreamVolume(Kind, u32, u32),
     ToggleStreamMute(Kind, u32),
-    ToggleExpanded(Kind, String),
+    Toggle(Open),
+    ToggleMics,
     Mpris(MprisUpdate),
     MprisRequest(MprisRequest),
     OpenSettings,
@@ -131,11 +142,9 @@ impl cosmic::Application for Audio {
                     self.popup = None;
                 }
             }
-            Message::Surface(action) => {
-                return cosmic::task::message(cosmic::Action::Surface(action));
-            }
 
             Message::SetDefault(kind, pos) => {
+                self.open = None;
                 if let Some(device) = self.model.device_list(kind).get(pos) {
                     self.send(Command::SetDefault(kind, device.name.clone()));
                 }
@@ -171,6 +180,7 @@ impl cosmic::Application for Audio {
                 }
             }
             Message::GroupDevice(kind, key, choice) => {
+                self.open = None;
                 let devices = self.model.device_list(kind);
                 let device = choice
                     .checked_sub(1)
@@ -189,11 +199,10 @@ impl cosmic::Application for Audio {
                     self.set_stream_mute(kind, index, mute);
                 }
             }
-            Message::ToggleExpanded(kind, key) => {
-                if !self.expanded.remove(&(kind, key.clone())) {
-                    self.expanded.insert((kind, key));
-                }
+            Message::Toggle(open) => {
+                self.open = (self.open.as_ref() != Some(&open)).then_some(open);
             }
+            Message::ToggleMics => self.mics_open = !self.mics_open,
 
             Message::Mpris(MprisUpdate::Player(player)) => self.player = Some(player),
             Message::Mpris(MprisUpdate::Finished | MprisUpdate::Setup) => self.player = None,
@@ -303,28 +312,21 @@ impl cosmic::Application for Audio {
         } else {
             content = content
                 .push(self.device_section(Kind::Output))
-                .push(self.device_section(Kind::Input))
-                .push(separator());
+                .push(self.device_section(Kind::Input));
 
             let playback = self.model.groups(Kind::Output);
-            content = content.push(section_header(match playback.len() {
-                0 => "No apps playing".to_string(),
-                1 => "Playing · 1 app".to_string(),
-                n => format!("Playing · {n} apps"),
-            }));
-            if !playback.is_empty() {
+            if playback.is_empty() {
+                content = content.push(padded_control(text::caption("No apps playing")));
+            } else {
                 content = content.push(self.app_list(Kind::Output, playback, PLAYBACK_LIST_HEIGHT));
             }
 
             let record = self.model.groups(Kind::Input);
             if !record.is_empty() {
-                content = content
-                    .push(separator())
-                    .push(section_header(match record.len() {
-                        1 => "Using mic · 1 app".to_string(),
-                        n => format!("Using mic · {n} apps"),
-                    }));
-                content = content.push(self.app_list(Kind::Input, record, RECORD_LIST_HEIGHT));
+                content = content.push(self.mic_line(&record));
+                if self.mics_open {
+                    content = content.push(self.app_list(Kind::Input, record, RECORD_LIST_HEIGHT));
+                }
             }
         }
 
@@ -418,35 +420,42 @@ impl Audio {
         }
     }
 
-    /// The Output or Input heading with its device picker and volume slider.
+    /// The Output or Input heading, its device list when unfolded, and its volume slider.
     fn device_section(&self, kind: Kind) -> Element<'_, Message> {
         let devices = self.model.device_list(kind);
         let default = self.model.default_device(kind);
-        let selected = default.and_then(|d| devices.iter().position(|x| x.index == d.index));
-        let names: Vec<String> = devices.iter().map(|d| d.description.clone()).collect();
         let (mute, value) = default.map_or((true, 0), |d| (d.mute, percent(&d.volume)));
+        let open = self.open == Some(Open::Devices(kind));
 
-        let picker: Element<'_, Message> = if names.is_empty() {
-            text::caption("No devices").into()
-        } else {
-            self.dropdown(
-                names,
-                selected,
-                move |pos| Message::SetDefault(kind, pos),
-                220.0,
-            )
-        };
+        let heading = menu_button(
+            row![
+                column![
+                    text::heading(match kind {
+                        Kind::Output => "Output",
+                        Kind::Input => "Input",
+                    }),
+                    text::caption(default.map_or("No device", |d| d.description.as_str()))
+                        .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
+                ]
+                .width(Length::Fill),
+                chevron(open),
+            ]
+            .align_y(Alignment::Center),
+        )
+        .on_press(Message::Toggle(Open::Devices(kind)));
 
-        let heading = row![
-            text::heading(match kind {
-                Kind::Output => "Output",
-                Kind::Input => "Input",
-            }),
-            space::horizontal(),
-            picker,
-        ]
-        .align_y(Alignment::Center)
-        .spacing(8);
+        let mut section = column![heading];
+        if open {
+            for (pos, device) in devices.iter().enumerate() {
+                let selected = default.is_some_and(|d| d.index == device.index);
+                section = section.push(option_row(
+                    &device.description,
+                    None,
+                    selected,
+                    Message::SetDefault(kind, pos),
+                ));
+            }
+        }
 
         let controls = row![
             mute_button(
@@ -467,9 +476,10 @@ impl Audio {
         .align_y(Alignment::Center)
         .spacing(10);
 
-        padded_control(column![heading, controls].spacing(8)).into()
+        section.push(padded_control(controls)).into()
     }
 
+    /// Apps in a card, one line each, scrolling once the card is `height` tall.
     fn app_list<'a>(
         &'a self,
         kind: Kind,
@@ -478,12 +488,12 @@ impl Audio {
     ) -> Element<'a, Message> {
         let list = groups
             .into_iter()
-            .fold(Column::new().spacing(4), |list, group| {
-                list.push(self.app_row(kind, group))
+            .fold(list_column().list_item_padding([2, 8]), |list, group| {
+                list.add(self.app_row(kind, group))
             });
 
-        container(scrollable(list).height(Length::Shrink))
-            .max_height(height)
+        container(container(scrollable(list).height(Length::Shrink)).max_height(height))
+            .padding([4, 12])
             .into()
     }
 
@@ -492,122 +502,134 @@ impl Audio {
         let value = group.percent();
         let muted = group.muted();
         let max = self.max_volume(kind);
+        let open = self.open == Some(Open::App(kind, key.clone()));
 
-        let app_icon = icon::from_name(group.icon_name.unwrap_or("application-x-executable"))
-            .size(24)
-            .fallback(Some(icon::IconFallback::Names(vec![
-                "application-x-executable".into(),
-                "audio-x-generic".into(),
-            ])))
-            .icon();
-
-        let mut heading = row![
-            app_icon,
-            text::body(group.name)
-                .width(Length::Fill)
-                .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
-        ]
-        .align_y(Alignment::Center)
-        .spacing(10);
-
-        let expanded = self.expanded.contains(&(kind, key.clone()));
-        if group.streams.len() > 1 {
-            heading = heading.push(
-                button::text(format!("{} streams", group.streams.len()))
-                    .trailing_icon(icon::from_name(if expanded {
-                        "go-up-symbolic"
-                    } else {
-                        "go-down-symbolic"
-                    }))
-                    .on_press(Message::ToggleExpanded(kind, key.clone())),
-            );
-        }
+        // The app's icon is its mute button; a muted app shows the muted icon instead.
+        let icon_element: Element<'a, Message> = if muted {
+            icon::from_name(volume_icon(kind, true, 0))
+                .size(24)
+                .symbolic(true)
+                .icon()
+                .into()
+        } else {
+            icon::from_name(group.icon_name.unwrap_or("application-x-executable"))
+                .size(24)
+                .fallback(Some(icon::IconFallback::Names(vec![
+                    "application-x-executable".into(),
+                    "audio-x-generic".into(),
+                ])))
+                .icon()
+                .into()
+        };
+        let mute = button::custom(icon_element)
+            .class(cosmic::theme::Button::Icon)
+            .padding(4)
+            .on_press(Message::ToggleGroupMute(kind, key.clone()));
 
         // Every stream of the app is pinned to the same device, or the first one decides.
-        let devices = self.model.device_list(kind);
         let pinned = group
             .streams
             .first()
             .and_then(|s| self.model.pinned_device(s));
-        let selected = match pinned {
-            Some(device) => devices
-                .iter()
-                .position(|d| d.index == device.index)
-                .map(|p| p + 1),
-            None => Some(0),
-        };
-        let names: Vec<String> = std::iter::once("Default".to_string())
-            .chain(devices.iter().map(|d| d.description.clone()))
-            .collect();
-        heading = heading.push(self.dropdown(
-            names,
-            selected,
-            {
-                let key = key.clone();
-                move |choice| Message::GroupDevice(kind, key.clone(), choice)
-            },
-            DEVICE_DROPDOWN_WIDTH,
-        ));
 
-        let controls = row![
-            space::horizontal().width(Length::Fixed(28.0)),
-            mute_button(
-                volume_icon(kind, muted, value),
-                16,
-                Message::ToggleGroupMute(kind, key.clone()),
-            ),
-            slider(0..=max, value, {
-                let key = key.clone();
-                move |v| Message::GroupVolume(kind, key.clone(), v)
-            }),
-            percent_label(muted, value),
+        // Name, stream count and pinned-device tag share one fixed-width button that
+        // opens the device list, so every slider starts at the same place.
+        let mut name = row![
+            text::body(group.name)
+                .width(Length::Fill)
+                .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1)))
         ]
         .align_y(Alignment::Center)
-        .spacing(10);
+        .spacing(6);
+        if group.streams.len() > 1 {
+            name = name.push(text::caption(group.streams.len().to_string()));
+        }
+        if let Some(device) = pinned {
+            name = name.push(
+                text::caption(short_name(&device.description)).class(cosmic::theme::Text::Accent),
+            );
+        }
+        let name = button::custom(name)
+            .class(cosmic::theme::Button::MenuItem)
+            .padding([4, 6])
+            .width(Length::Fixed(APP_NAME_WIDTH))
+            .on_press(Message::Toggle(Open::App(kind, key.clone())));
 
-        let mut row = column![heading, controls].spacing(2);
+        let mut line = row![mute, name].align_y(Alignment::Center).spacing(6);
+        line = line.push(slider(0..=max, value, {
+            let key = key.clone();
+            move |v| Message::GroupVolume(kind, key.clone(), v)
+        }));
 
-        if expanded {
-            for stream in &group.streams {
-                let value = percent(&stream.volume);
-                let index = stream.index;
-                row = row.push(
-                    row![
-                        space::horizontal().width(Length::Fixed(28.0)),
-                        mute_button(
-                            volume_icon(kind, stream.mute, value),
-                            16,
-                            Message::ToggleStreamMute(kind, index),
-                        ),
-                        text::caption(stream.media_name.as_str())
-                            .width(Length::Fixed(110.0))
-                            .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
-                        slider(0..=max, value, move |v| Message::StreamVolume(
-                            kind, index, v
-                        )),
-                        percent_label(stream.mute, value),
-                    ]
-                    .align_y(Alignment::Center)
-                    .spacing(8),
-                );
+        let mut item = column![line];
+        if open {
+            item = item.push(option_row(
+                "Default",
+                Some(match kind {
+                    Kind::Output => "follows Output",
+                    Kind::Input => "follows Input",
+                }),
+                pinned.is_none(),
+                Message::GroupDevice(kind, key.clone(), 0),
+            ));
+            for (pos, device) in self.model.device_list(kind).iter().enumerate() {
+                item = item.push(option_row(
+                    &device.description,
+                    None,
+                    pinned.is_some_and(|p| p.index == device.index),
+                    Message::GroupDevice(kind, key.clone(), pos + 1),
+                ));
+            }
+
+            if group.streams.len() > 1 {
+                item = item.push(padded_control(divider::horizontal::default()).padding([4, 0]));
+                for stream in &group.streams {
+                    let value = percent(&stream.volume);
+                    let index = stream.index;
+                    item = item.push(
+                        row![
+                            mute_button(
+                                volume_icon(kind, stream.mute, value),
+                                16,
+                                Message::ToggleStreamMute(kind, index),
+                            ),
+                            text::caption(stream.media_name.as_str())
+                                .width(Length::Fixed(STREAM_NAME_WIDTH))
+                                .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
+                            slider(0..=max, value, move |v| Message::StreamVolume(
+                                kind, index, v
+                            )),
+                        ]
+                        .align_y(Alignment::Center)
+                        .spacing(8)
+                        .padding([0, 0, 0, 28]),
+                    );
+                }
             }
         }
 
-        padded_control(row).padding([4, 16]).into()
+        item.into()
     }
 
-    fn dropdown<'a>(
-        &self,
-        names: Vec<String>,
-        selected: Option<usize>,
-        on_select: impl Fn(usize) -> Message + Send + Sync + 'static,
-        width: f32,
-    ) -> Element<'a, Message> {
-        let dropdown = dropdown(names, selected, on_select).width(Length::Fixed(width));
-        match self.popup {
-            Some(parent) => dropdown.with_popup(parent, Message::Surface, |m| m).into(),
-            None => dropdown.into(),
-        }
+    /// One folded line naming the apps that use the mic.
+    fn mic_line(&self, groups: &[Group<'_>]) -> Element<'_, Message> {
+        let names: Vec<&str> = groups.iter().map(|g| g.name).collect();
+        menu_button(
+            row![
+                icon::from_name("audio-input-microphone-symbolic")
+                    .size(16)
+                    .symbolic(true)
+                    .icon(),
+                text::body(format!("{} using mic", names.join(", ")))
+                    .width(Length::Fill)
+                    .ellipsize(Ellipsize::End(EllipsizeHeightLimit::Lines(1))),
+                chevron(self.mics_open),
+            ]
+            .align_y(Alignment::Center)
+            .spacing(10),
+        )
+        .on_press(Message::ToggleMics)
+        .into()
     }
 
     fn media_bar(&self) -> Option<Element<'_, Message>> {
@@ -675,10 +697,53 @@ impl Audio {
     }
 }
 
-fn section_header<'a>(label: String) -> Element<'a, Message> {
-    padded_control(text::caption_heading(label))
-        .padding([4, 16])
+fn chevron<'a>(open: bool) -> Element<'a, Message> {
+    icon::from_name(if open {
+        "go-up-symbolic"
+    } else {
+        "go-down-symbolic"
+    })
+    .size(16)
+    .symbolic(true)
+    .icon()
+    .into()
+}
+
+/// A choice in an unfolded device list, ticked when `selected`.
+fn option_row<'a>(
+    label: &str,
+    hint: Option<&'static str>,
+    selected: bool,
+    message: Message,
+) -> Element<'a, Message> {
+    let tick: Element<'a, Message> = if selected {
+        icon::from_name("object-select-symbolic")
+            .size(16)
+            .symbolic(true)
+            .icon()
+            .into()
+    } else {
+        space::horizontal().width(Length::Fixed(16.0)).into()
+    };
+    let mut line = row![tick, text::body(label.to_string())]
+        .align_y(Alignment::Center)
+        .spacing(10);
+    if let Some(hint) = hint {
+        line = line.push(text::caption(hint));
+    }
+    menu_button(line)
+        .padding([6, 16, 6, 32])
+        .on_press(message)
         .into()
+}
+
+/// "Headset (Arctis 7)" → "Headset", to keep the pinned-device tag short.
+fn short_name(description: &str) -> String {
+    description
+        .split(" (")
+        .next()
+        .unwrap_or(description)
+        .to_string()
 }
 
 fn mute_button<'a>(name: &'static str, size: u16, message: Message) -> Element<'a, Message> {
