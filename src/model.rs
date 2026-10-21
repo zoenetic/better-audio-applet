@@ -4,6 +4,7 @@
 
 use libpulse_binding::volume::{ChannelVolumes, Volume};
 use std::collections::{BTreeMap, HashMap};
+use std::time::{Duration, Instant};
 
 use crate::backend::{Event, TargetKey};
 use crate::pulse::{Device, Kind, Stream};
@@ -19,7 +20,22 @@ pub struct Model {
     default_source: String,
     /// `target.object` and `target.node` metadata, keyed by stream node id.
     targets: HashMap<u32, Targets>,
+    /// When the volume of a device or stream was last changed here.
+    changed_here: HashMap<Volumed, Instant>,
 }
+
+/// Something with a volume: a device or a stream, by kind and index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Volumed {
+    Device(Kind, u32),
+    Stream(Kind, u32),
+}
+
+/// How long after a volume change here the server's reports of that volume are
+/// ignored. While a slider is dragged, the server reports values that lag behind the
+/// cursor (or are rounded to the hardware's steps); taking them would make the slider
+/// jump back and forth under the cursor.
+const HOLD: Duration = Duration::from_millis(500);
 
 #[derive(Default)]
 struct Targets {
@@ -64,14 +80,24 @@ impl Model {
                 self.default_sink = sink;
                 self.default_source = source;
             }
-            Event::Device(device) => {
-                self.devices_mut(device.kind).insert(device.index, device);
+            Event::Device(mut device) => {
+                let held = self.is_held(Volumed::Device(device.kind, device.index));
+                let devices = self.devices_mut(device.kind);
+                if held && let Some(known) = devices.get(&device.index) {
+                    device.volume = known.volume;
+                }
+                devices.insert(device.index, device);
             }
             Event::DeviceRemoved(kind, index) => {
                 self.devices_mut(kind).remove(&index);
             }
-            Event::Stream(stream) => {
-                self.streams_mut(stream.kind).insert(stream.index, stream);
+            Event::Stream(mut stream) => {
+                let held = self.is_held(Volumed::Stream(stream.kind, stream.index));
+                let streams = self.streams_mut(stream.kind);
+                if held && let Some(known) = streams.get(&stream.index) {
+                    stream.volume = known.volume;
+                }
+                streams.insert(stream.index, stream);
             }
             Event::StreamRemoved(kind, index) => {
                 self.streams_mut(kind).remove(&index);
@@ -88,6 +114,22 @@ impl Model {
                 }
             }
             Event::TargetsReset => self.targets.clear(),
+        }
+    }
+
+    /// Note that a volume was just changed here, so reports of it are held off.
+    pub fn changed_here(&mut self, what: Volumed) {
+        self.changed_here.insert(what, Instant::now());
+    }
+
+    fn is_held(&mut self, what: Volumed) -> bool {
+        match self.changed_here.get(&what) {
+            Some(at) if at.elapsed() < HOLD => true,
+            Some(_) => {
+                self.changed_here.remove(&what);
+                false
+            }
+            None => false,
         }
     }
 
@@ -208,4 +250,46 @@ pub fn with_percent(volume: &ChannelVolumes, percent: u32) -> ChannelVolumes {
         (percent as f64 / 100.0 * Volume::NORMAL.0 as f64).round() as u32,
     ));
     volume
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn speakers(percent: u32) -> Device {
+        let mut volume = ChannelVolumes::default();
+        volume.set(2, Volume::NORMAL);
+        Device {
+            kind: Kind::Output,
+            index: 1,
+            name: "speakers".into(),
+            description: "Speakers".into(),
+            volume: with_percent(&volume, percent),
+            mute: false,
+            serial: None,
+            node_id: None,
+        }
+    }
+
+    fn shown(model: &Model) -> u32 {
+        percent(&model.sinks[&1].volume)
+    }
+
+    #[test]
+    fn server_reports_are_held_off_after_a_change_here() {
+        let mut model = Model::default();
+        model.update(Event::Device(speakers(40)));
+
+        // The slider moved to 60 here; a lagging report of 50 must not move it back.
+        model.devices_mut(Kind::Output).get_mut(&1).unwrap().volume =
+            with_percent(&speakers(0).volume, 60);
+        model.changed_here(Volumed::Device(Kind::Output, 1));
+        model.update(Event::Device(speakers(50)));
+        assert_eq!(shown(&model), 60);
+
+        // Once the hold is over, changes made elsewhere show again.
+        std::thread::sleep(HOLD + Duration::from_millis(50));
+        model.update(Event::Device(speakers(30)));
+        assert_eq!(shown(&model), 30);
+    }
 }

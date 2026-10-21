@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use crate::backend::{self, Handle};
-use crate::model::{Group, Model, percent, with_percent};
+use crate::model::{Group, Model, Volumed, percent, with_percent};
 use crate::mpris_subscription::{self, MprisRequest, MprisUpdate, PlayerStatus};
 use crate::pulse::{Command, Device, Kind};
 use cosmic::iced::core::text::{Ellipsize, EllipsizeHeightLimit};
@@ -21,7 +21,10 @@ use cosmic::{
     },
     widget::{Column, button, container, divider, icon, scrollable, slider, space, text},
 };
+use libpulse_binding::volume::ChannelVolumes;
 use mpris2_zbus::player::PlaybackStatus;
+use std::collections::HashMap;
+use std::time::Duration;
 
 /// Height at which the app list starts scrolling.
 const APP_LIST_HEIGHT: f32 = 380.0;
@@ -33,6 +36,9 @@ const APP_ICON: u16 = 36;
 /// Handle size for the smaller sliders (the main ones are 26).
 const SMALL_HANDLE: f32 = 16.0;
 const WHEEL_STEP: i32 = 5;
+/// Volume changes are sent at most this often, latest value first; dragging a
+/// slider otherwise sends one for every pixel the cursor moves.
+const SEND_INTERVAL: Duration = Duration::from_millis(30);
 
 /// Which page of the popup is showing. Everything beyond the main page is one tap
 /// away and has a back button.
@@ -59,6 +65,9 @@ pub struct Audio {
     max_source_volume: u32,
     player: Option<PlayerStatus>,
     token_tx: Option<calloop::channel::Sender<TokenRequest>>,
+    /// Volume changes waiting to be sent.
+    pending: HashMap<Volumed, ChannelVolumes>,
+    send_scheduled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -80,6 +89,8 @@ pub enum Message {
     /// `None` is "Default"; otherwise a device index.
     GroupDevice(Kind, String, Option<u32>),
     StreamVolume(Kind, u32, u32),
+    /// Send the pending volume changes.
+    SendVolumes,
     Mpris(MprisUpdate),
     MprisRequest(MprisRequest),
     OpenSettings,
@@ -209,6 +220,22 @@ impl cosmic::Application for Audio {
             }
             Message::StreamVolume(kind, index, value) => self.set_stream_volume(kind, index, value),
 
+            Message::SendVolumes => {
+                self.send_scheduled = false;
+                for (what, volume) in std::mem::take(&mut self.pending) {
+                    // Keep holding off the server's reports until this one lands.
+                    self.model.changed_here(what);
+                    self.send(match what {
+                        Volumed::Device(kind, index) => {
+                            Command::SetDeviceVolume(kind, index, volume)
+                        }
+                        Volumed::Stream(kind, index) => {
+                            Command::SetStreamVolume(kind, index, volume)
+                        }
+                    });
+                }
+            }
+
             Message::Mpris(MprisUpdate::Player(player)) => self.player = Some(player),
             Message::Mpris(MprisUpdate::Finished | MprisUpdate::Setup) => self.player = None,
             Message::MprisRequest(request) => {
@@ -259,6 +286,13 @@ impl cosmic::Application for Audio {
             },
         }
 
+        if !self.pending.is_empty() && !self.send_scheduled {
+            self.send_scheduled = true;
+            return Task::future(async {
+                tokio::time::sleep(SEND_INTERVAL).await;
+                cosmic::Action::App(Message::SendVolumes)
+            });
+        }
         Task::none()
     }
 
@@ -373,20 +407,30 @@ impl Audio {
         }
     }
 
+    /// Show the new volume at once; queue it to be sent (see `SEND_INTERVAL`).
     fn set_device_volume(&mut self, kind: Kind, index: u32, value: u32) {
-        if let Some(device) = self.model.devices_mut(kind).get_mut(&index) {
+        if let Some(device) = self.model.devices_mut(kind).get_mut(&index)
+            && percent(&device.volume) != value
+        {
             device.volume = with_percent(&device.volume, value);
-            let command = Command::SetDeviceVolume(kind, index, device.volume);
-            self.send(command);
+            let volume = device.volume;
+            self.queue_volume(Volumed::Device(kind, index), volume);
         }
     }
 
     fn set_stream_volume(&mut self, kind: Kind, index: u32, value: u32) {
-        if let Some(stream) = self.model.streams_mut(kind).get_mut(&index) {
+        if let Some(stream) = self.model.streams_mut(kind).get_mut(&index)
+            && percent(&stream.volume) != value
+        {
             stream.volume = with_percent(&stream.volume, value);
-            let command = Command::SetStreamVolume(kind, index, stream.volume);
-            self.send(command);
+            let volume = stream.volume;
+            self.queue_volume(Volumed::Stream(kind, index), volume);
         }
+    }
+
+    fn queue_volume(&mut self, what: Volumed, volume: ChannelVolumes) {
+        self.model.changed_here(what);
+        self.pending.insert(what, volume);
     }
 
     fn output_icon_name(&self) -> &'static str {
