@@ -91,7 +91,7 @@ impl Model {
         }
     }
 
-    fn devices_mut(&mut self, kind: Kind) -> &mut BTreeMap<u32, Device> {
+    pub fn devices_mut(&mut self, kind: Kind) -> &mut BTreeMap<u32, Device> {
         match kind {
             Kind::Output => &mut self.sinks,
             Kind::Input => &mut self.sources,

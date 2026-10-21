@@ -4,17 +4,17 @@ A panel applet that replaces COSMIC's built-in sound applet. On top of what the
 stock one does, it lets you set the **volume and output device of each app** from
 the panel, without opening COSMIC Settings.
 
-- Output and Input volume sliders at the top, with mute buttons.
-- Below them, which device each one uses; tap a line to pick another.
-- Apps playing sound fold into one line ("Firefox, Spotify, Discord +6 playing"),
-  folded by default. Unfolded, every app gets one line in a card: its icon
-  (click to mute), its name and a volume slider. Apps with several streams (like
-  browser tabs) share one line with a stream count.
-- Tap an app's name to pick its device. **Default** means it follows the Output
-  device; picking a device pins the app to it, and a small tag shows where it is
-  pinned. WirePlumber remembers the pin next time the app starts; picking Default
-  again clears it. The same panel has a slider for each of the app's streams.
-- Apps using the mic fold into their own line the same way.
+- The output device's name is the heading, with the main volume under it, and a
+  compact mic volume line. Tap the device name (or the mic's name) to see every
+  device with its own volume and pick the default.
+- Every app making sound is listed up front: a large icon (click to mute), its
+  name, a wide volume slider, and where it plays ("Default ›", or the device it
+  is pinned to).
+- Tap where an app plays to open its page: pick its device (**Default** follows
+  the Output device) and adjust each of its streams, like separate browser tabs.
+  WirePlumber remembers the pin next time the app starts; picking Default again
+  clears it.
+- Apps using the mic are one line that opens their own page.
 - The app list scrolls once it gets long, so the popup stays a sensible size.
 - Now playing bar with previous / play-pause / next (click it to open the player).
 - On the panel icon: scroll to change volume, middle-click to mute.
