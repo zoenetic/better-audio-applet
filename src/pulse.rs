@@ -13,6 +13,7 @@ use pulse::proplist::{Proplist, properties};
 use pulse::volume::ChannelVolumes;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
@@ -91,6 +92,9 @@ const IGNORED_BINARIES: &[&str] = &[
     "cosmic-greeter",
     "xdg-desktop-portal-cosmic",
 ];
+
+/// Set by `--watch-streams`: print every stream's properties as it is seen.
+pub static WATCH_STREAMS: AtomicBool = AtomicBool::new(false);
 
 pub fn run(commands: Receiver<Command>, events: UnboundedSender<Event>) {
     loop {
@@ -420,6 +424,26 @@ fn source_output(info: &SourceOutputInfo) -> Option<Stream> {
 }
 
 fn stream(
+    kind: Kind,
+    index: u32,
+    device: u32,
+    name: Option<&str>,
+    props: &Proplist,
+    volume: ChannelVolumes,
+    mute: bool,
+) -> Option<Stream> {
+    let stream = parse_stream(kind, index, device, name, props, volume, mute);
+    if WATCH_STREAMS.load(Ordering::Relaxed) {
+        println!(
+            "{} {kind:?} stream {index}:\n  {}",
+            if stream.is_some() { "SHOWN" } else { "HIDDEN" },
+            props.to_string_sep("\n  ").unwrap_or_default()
+        );
+    }
+    stream
+}
+
+fn parse_stream(
     kind: Kind,
     index: u32,
     device: u32,

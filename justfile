@@ -36,6 +36,10 @@ check *args:
 run *args:
     env RUST_LOG=better_audio_applet=debug RUST_BACKTRACE=full cargo run {{ args }}
 
+# Prints every sound stream as it appears, and whether the applet lists it
+watch-streams *args:
+    cargo run {{ args }} -- --watch-streams
+
 # Installs files into the system
 install: check-installable
     install -Dm0755 {{ targetdir }}/{{ target }}/{{ name }} {{ bindir }}/{{ name }}

@@ -43,6 +43,10 @@ Then open *Settings → Desktop → Panel → Configure panel applets*, add
 
 To remove: `sudo just uninstall`.
 
+After installing a new build, restart the applet so the panel picks it up
+(`pkill better-audio-ap`; the panel starts it again). Check which build is
+installed with `better-audio-applet --version`, which shows the git commit.
+
 ### From a release
 
 Each [release](https://github.com/zoenetic/better-audio-applet/releases) has a
@@ -58,6 +62,7 @@ sudo just install
 ```sh
 just check    # clippy + tests
 just run      # run outside the panel, with debug logs
+just watch-streams   # print every sound stream as it appears, and whether it's listed
 just vendor   # bundle crates into vendor.tar for offline builds (just build-vendored)
 ```
 
